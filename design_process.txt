@@ -1,0 +1,83 @@
+Design a platform that syncs transaction data from external providers (banks, crypto exchanges, etc) 
+and allows users to track their net worth over time. Suppose that there are 100k users, with each user 
+connecting 10 or more data sources.
+
+**Please spend no more than 1 hour on this part.** We’d like you to talk us through your plan and data model, 
+draw a system diagram and touch on the scalability/reliability/maintainability of your system.
+
+When designing this system I predict alot of possible source types, so adding them should be as painless as possible
+Another focus of the design is the transactions table which needs to be enable high selectivity querying  beacause it will surely have alot of rows
+
+First we will surely need a user table
+
+CREATE TABLE user (
+  id serial PRIMARY KEY
+)
+
+a user adds his data sources
+
+CREATE TABLE user_source (
+  id serial PRIMARY KEY,
+  user_id int4 NOT NULL REFERENCES user (id),
+  source_type_id int4 NOT NULL REFERENCES source_type (id),
+  source_denorm_data varchar(65355) NOT NULL 
+)
+
+in source denorm data we will keep a denormalized list of values needed to access the source
+
+now we need a source type table
+
+CREATE TABLE source_type (
+  id int4 PRIMARY KEY,
+  label varchar(255) NOT NULL
+)
+
+finally we create a table for transactions
+
+CREATE TABLE transaction (
+  id serial PRIMARY KEY,
+  user_source_id int4 NOT NULL REFERENCES user_source (id),
+  amount numeric(12,3) NOT NULL,
+  transaction_time timestamptz NOT NULL
+)
+numeric is an exact but slower type commonly used for exact monetary calculations. If it proves to slow we would
+have to seek alternatives
+
+this is the basic skeleton, now it needs optimization and details to solve some real life issues
+
+first we will save the time the service was last synced to for each user_source so we can fetch only new records if the service 
+enables it
+
+ALTER TABLE user_source
+ADD COLUMN last_sync_time timestamptz NOT NULL;
+
+the sources will likely have a parameter to fetch transacitons in a time range
+
+in our node project we will make a sources folder which will house our 
+classes used to communicate with the sources. We will impose an interface on the
+class design using typescript, then we will be able to use those in various sync scripts
+most likely crons, some may offer webhooks
+
+when adding a new source type we need to write the new interface class, add the relevant mutations and add it to the source_type table
+
+Our transaction table will soon grow very large and would need to be optimized
+we have a few choices: 
+  - partioning
+  - saving data older than an amount of time with a lower resolution, like adding whole months into a single value per source, detailed 
+values could be saved somewhere else, like in a file
+
+There could be a problem with rate limiting/cost of syncing with the services 
+Some possible optimizations are: 
+  - batching multiple user account syncs from the same service if the service allows it, making it a facebook dataloader would 
+  probably be a clean pattern
+  - if we receive a too many requests error often we may need to implement a queue
+
+We should spread the syncing so we dont have a concentration of activity in one period of day, maybe save the user timezone
+and do it when its mearly morning in their timezone
+
+When syncing for the first time we need to format the data according to our policy of treating old transactions
+When querying for the user balanance we will simply get the state of his user_sources and add them together
+
+times up :) :o
+
+
