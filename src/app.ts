@@ -1,23 +1,46 @@
 import knex, { Knex } from 'knex'
+import { subMonths, endOfMonth, format } from 'date-fns'
+
+const NUM_TRANSACTIONS = 1000000;
 
 async function main() {
   let syncDB: any = null;
   try {
     const syncDB = await setupDB()
-    const result = await syncDB.raw(`
-      SELECT SUM(amount)
-      FROM "user_source" us
-      JOIN "transaction" t ON t.user_source_id  = us.id
-      WHERE us."user_id" = :userId
-    `, { userId: 1 })
-    console.log('rezultat',result )
+    const userId = 1;
+    const endOfLastMonth = subMonths(endOfMonth(new Date()), 1)
+    const months = [endOfLastMonth];
+    for(let i = 1; i < 12; i++) {
+      months.push(subMonths(endOfLastMonth, i))
+    }
+    const perAccountBalanceQuery = syncDB.raw(`
+    SELECT *
+    FROM crosstab('
+    select id as account_id, to_char(month, ''YYYY-MM'') as d_month, coalesce((
+      select sum(amount)
+      from "transaction" t 
+      where t.user_source_id = user_source.id and t.transaction_time < month
+    ), 0) as balance
+    from user_source 
+    join (
+      select * from (VALUES ${months.map(month => `(''${format(month, 'yyyy-MM-dd HH:mm:ss.SSS')}''::timestamp)`)}) months("month")
+    ) months on true
+    where user_source.user_id = ${userId}
+    order by 1,2 desc
+    ')
+    AS final_result(account_id int, ${months.map(month => `"${format(month, 'yyyy-MM')}" numeric`)});
+    `)
+    console.log(perAccountBalanceQuery.toString())
+    const start = +new Date();
+    const perAccountBalance = await perAccountBalanceQuery;
+    console.log(`Account query finished in: ${+new Date() - start} ms.`)
+    console.log('perAccountBalance', perAccountBalance.rows)
     syncDB.destroy()
   } catch (e) {
     console.log(e)
     if(syncDB) syncDB.destory()
   }
 }
-
 main()
 
 async function setupDB() {
@@ -31,6 +54,25 @@ async function setupDB() {
         password: 'root',
       }
   })
+  const syncDBExists = await appPG.raw(`
+  select exists(
+    SELECT datname FROM pg_catalog.pg_database WHERE datname = 'sync'
+   );
+  `)
+  if(syncDBExists.rows[0].exists) {
+    appPG.destroy();
+    return knex({
+      client: 'postgresql',
+        connection: {
+          port: 5432,
+          host: 'localhost',
+          database: 'sync',
+          user: 'postgres',
+          password: 'root',
+        }
+    })
+  }
+  
   await appPG.raw('CREATE DATABASE sync')
   await appPG.destroy()
   const syncDB = knex({
@@ -43,6 +85,7 @@ async function setupDB() {
         password: 'root',
       }
   })
+  await syncDB.raw('create extension tablefunc;')
   await syncDB.raw(`
   CREATE TABLE "user" (
     id serial PRIMARY KEY
@@ -72,6 +115,7 @@ async function setupDB() {
   ALTER TABLE user_source
   ADD COLUMN last_sync_time timestamptz NOT NULL
   `)
+  await syncDB.raw(`CREATE INDEX ON "transaction" (user_source_id, transaction_time)`)
   await seedDB(syncDB)
   return syncDB;
 }
@@ -125,7 +169,7 @@ async function seedDB(syncDB: Knex) {
     amount: number
     transaction_time: Date
   }> = [];
-  for(let i = 1; i <= 1000000; i++) {
+  for(let i = 1; i <= NUM_TRANSACTIONS; i++) {
     transactionArr.push({
       user_source_id: getRandomInt(1, 1000000),
       amount: getRandomInt(1, 100000000),
