@@ -45,6 +45,9 @@ have to seek alternatives
 
 this is the basic skeleton, now it needs optimization and details to solve some real life issues
 
+CREATE INDEX ON "transaction" (user_source_id, transaction_time)
+This index will be very helpfull for our balance over time query
+
 first we will save the time the service was last synced to for each user_source so we can fetch only new records if the service 
 enables it
 
